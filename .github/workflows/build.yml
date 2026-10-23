@@ -16,8 +16,6 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      
-
       - name: Unzip uploaded archive (if any)
         run: |
           for z in *.zip; do
