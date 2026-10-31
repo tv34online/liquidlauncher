@@ -76,13 +76,18 @@ fun App(dir: File) {
     var playing by remember { mutableStateOf<Channel?>(null) }
     var epg by remember { mutableStateOf<Map<String, ChEpg>>(emptyMap()) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    var epgPct by remember { mutableIntStateOf(-2) }
     LaunchedEffect(Unit) {
         runCatching { withContext(Dispatchers.IO) { Playlist.load(File(dir, "playlist.m3u")) } }
             .onSuccess { channels = it }.onFailure { failed = true }
     }
     LaunchedEffect(channels) {
         val list = channels ?: return@LaunchedEffect
-        epg = withContext(Dispatchers.IO) { runCatching { Epg.load(File(dir, "epg.json"), list) }.getOrDefault(emptyMap()) }
+        epg = withContext(Dispatchers.IO) {
+            runCatching { Epg.load(File(dir, "epg.json"), list) { epgPct = it } }.getOrDefault(emptyMap())
+        }
+        if (epgPct > -2) { epgPct = 100; delay(1500) }
+        epgPct = -2
     }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
     val guide = Guide(epg, now)
@@ -97,6 +102,12 @@ fun App(dir: File) {
             cur == null -> Browse(list, guide) { playing = it }
             else -> PlayerScreen(list, cur, guide, { playing = it }, { playing = null })
         }
+        if (playing == null && epgPct > -2) Text(
+            if (epgPct < 0) "Телепрограмма…" else "Телепрограмма $epgPct%",
+            Modifier.align(Alignment.BottomStart).padding(12.dp).clip(RoundedCornerShape(8.dp))
+                .background(Ink.copy(alpha = 0.85f)).padding(horizontal = 10.dp, vertical = 4.dp),
+            color = Muted, fontSize = 14.sp
+        )
     }
 }
 
@@ -123,6 +134,19 @@ fun Wordmark(size: TextUnit) {
     }
 }
 
+const val LOGO_URL = "https://gitverse.ru/api/repos/tv34online/tv34online/raw/branch/master/banner_tv.png"
+
+/** Логотип с GitVerse; если не загрузился — текстовая надпись. */
+@Composable
+fun BrandLogo(height: Dp, fallback: TextUnit) {
+    var failed by remember { mutableStateOf(false) }
+    if (failed) Wordmark(fallback)
+    else AsyncImage(
+        LOGO_URL, "Телевизор 34", Modifier.fillMaxWidth().height(height),
+        contentScale = ContentScale.Fit, alignment = Alignment.CenterStart, onError = { failed = true }
+    )
+}
+
 @Composable
 fun NumBadge(num: Int, inverted: Boolean, size: Dp = 48.dp) {
     Box(
@@ -141,7 +165,7 @@ fun Logo(ch: Channel, guide: Guide, size: Dp, inverted: Boolean) {
     var failed by remember(url) { mutableStateOf(false) }
     if (url == null || failed) NumBadge(ch.num, inverted, size)
     else Box(
-        Modifier.size(size).clip(RoundedCornerShape(10.dp)).background(Paper).padding(6.dp),
+        Modifier.size(size).clip(RoundedCornerShape(10.dp)).background(Color.Black).padding(6.dp),
         contentAlignment = Alignment.Center
     ) {
         AsyncImage(url, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit, onError = { failed = true })
@@ -187,7 +211,7 @@ fun Browse(all: List<Channel>, guide: Guide, onPick: (Channel) -> Unit) {
     if (LocalConfiguration.current.screenWidthDp >= 720) {
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.width(300.dp).fillMaxHeight().padding(24.dp)) {
-                Wordmark(28.sp)
+                BrandLogo(110.dp, 28.sp)
                 Spacer(Modifier.height(20.dp))
                 LazyColumn { itemsIndexed(groups) { i, g -> GroupItem(g, i == sel) { sel = i } } }
             }
@@ -195,7 +219,7 @@ fun Browse(all: List<Channel>, guide: Guide, onPick: (Channel) -> Unit) {
         }
     } else {
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.padding(start = 20.dp, top = 16.dp, bottom = 8.dp)) { Wordmark(26.sp) }
+            Box(Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp)) { BrandLogo(64.dp, 26.sp) }
             LazyRow(contentPadding = PaddingValues(horizontal = 10.dp)) {
                 itemsIndexed(groups) { i, g -> GroupItem(g, i == sel) { sel = i } }
             }
