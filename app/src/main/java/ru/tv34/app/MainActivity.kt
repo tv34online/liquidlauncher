@@ -39,6 +39,16 @@ import androidx.media3.common.MediaItem
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import coil.compose.AsyncImage
+import android.content.Context
+import org.json.JSONObject
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -62,27 +72,42 @@ class MainActivity : ComponentActivity() {
 
 /** Логотипы и программа передач на текущий момент. */
 class Guide(private val map: Map<String, ChEpg>, val now: Long) {
-    fun logo(ch: Channel): String? = map[ch.name]?.logo ?: ch.logo
-    fun current(ch: Channel): Prog? = map[ch.name]?.progs?.firstOrNull { now >= it.start && now < it.stop }
-    fun next(ch: Channel): Prog? = current(ch)?.let { c -> map[ch.name]?.progs?.firstOrNull { it.start >= c.stop } }
+    fun logo(ch: Channel): String? = map[ch.epgKey]?.logo ?: ch.logo
+    fun current(ch: Channel): Prog? = map[ch.epgKey]?.progs?.firstOrNull { now >= it.start && now < it.stop }
+    fun next(ch: Channel): Prog? = current(ch)?.let { c -> map[ch.epgKey]?.progs?.firstOrNull { it.start >= c.stop } }
 }
 
 fun hm(ms: Long): String = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(ms))
 
 @Composable
 fun App(dir: File) {
-    var channels by remember { mutableStateOf<List<Channel>?>(null) }
+    val ctx = LocalContext.current
+    val prefs = remember { ctx.getSharedPreferences("tv34", Context.MODE_PRIVATE) }
+    var favs by remember { mutableStateOf<Set<String>>(prefs.getStringSet("favs", null)?.toSet() ?: emptySet()) }
+    var names by remember {
+        mutableStateOf<Map<String, String>>(
+            runCatching {
+                JSONObject(prefs.getString("names", "{}") ?: "{}").let { o -> o.keys().asSequence().associateWith { k -> o.getString(k) } }
+            }.getOrDefault(emptyMap())
+        )
+    }
+    var raw by remember { mutableStateOf<List<Channel>?>(null) }
     var failed by remember { mutableStateOf(false) }
     var playing by remember { mutableStateOf<Channel?>(null) }
     var epg by remember { mutableStateOf<Map<String, ChEpg>>(emptyMap()) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     var epgPct by remember { mutableIntStateOf(-2) }
+    var menuFor by remember { mutableStateOf<Channel?>(null) }
+    var renameFor by remember { mutableStateOf<Channel?>(null) }
+    fun saveFavs(v: Set<String>) { favs = v; prefs.edit().putStringSet("favs", v).apply() }
+    fun saveNames(v: Map<String, String>) { names = v; prefs.edit().putString("names", JSONObject(v).toString()).apply() }
+
     LaunchedEffect(Unit) {
         runCatching { withContext(Dispatchers.IO) { Playlist.load(File(dir, "playlist.m3u")) } }
-            .onSuccess { channels = it }.onFailure { failed = true }
+            .onSuccess { raw = it }.onFailure { failed = true }
     }
-    LaunchedEffect(channels) {
-        val list = channels ?: return@LaunchedEffect
+    LaunchedEffect(raw) {
+        val list = raw ?: return@LaunchedEffect
         epg = withContext(Dispatchers.IO) {
             runCatching { Epg.load(File(dir, "epg.json"), list) { epgPct = it } }.getOrDefault(emptyMap())
         }
@@ -90,6 +115,7 @@ fun App(dir: File) {
         epgPct = -2
     }
     LaunchedEffect(Unit) { while (true) { delay(30_000); now = System.currentTimeMillis() } }
+    val channels = remember(raw, names) { raw?.map { c -> names[c.url]?.let { c.copy(name = it) } ?: c } }
     val guide = Guide(epg, now)
     Box(Modifier.fillMaxSize().background(Ink)) {
         val list = channels
@@ -99,7 +125,7 @@ fun App(dir: File) {
                 if (failed) "Не удалось загрузить каналы. Проверьте интернет и откройте приложение снова." else "Загружаем каналы",
                 Modifier.align(Alignment.Center).padding(32.dp), color = Muted, fontSize = 20.sp
             )
-            cur == null -> Browse(list, guide) { playing = it }
+            cur == null -> Browse(list, guide, favs, { playing = it }, { menuFor = it })
             else -> PlayerScreen(list, cur, guide, { playing = it }, { playing = null })
         }
         if (playing == null && epgPct > -2) Text(
@@ -108,17 +134,37 @@ fun App(dir: File) {
                 .background(Ink.copy(alpha = 0.85f)).padding(horizontal = 10.dp, vertical = 4.dp),
             color = Muted, fontSize = 14.sp
         )
+        menuFor?.let { c ->
+            val isFav = c.url in favs
+            Dialog(onDismissRequest = { menuFor = null }) {
+                Column(Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF1E1E1E)).padding(16.dp).widthIn(min = 300.dp)) {
+                    Text(c.name, Modifier.padding(10.dp), color = Muted, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    MenuItem(if (isFav) "Убрать из избранного" else "Добавить в избранное") {
+                        saveFavs(if (isFav) favs - c.url else favs + c.url); menuFor = null
+                    }
+                    MenuItem("Изменить название") { renameFor = c; menuFor = null }
+                }
+            }
+        }
+        renameFor?.let { c ->
+            RenameDialog(c, onDismiss = { renameFor = null }) { new ->
+                val n = new.trim()
+                saveNames(if (n.isEmpty() || n == c.epgKey) names - c.url else names + (c.url to n))
+                renameFor = null
+            }
+        }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun Pressable(modifier: Modifier, onClick: () -> Unit, content: @Composable (Boolean) -> Unit) {
+fun Pressable(modifier: Modifier, onClick: () -> Unit, onLong: (() -> Unit)? = null, content: @Composable (Boolean) -> Unit) {
     var focused by remember { mutableStateOf(false) }
     Box(
         modifier.clip(RoundedCornerShape(12.dp))
             .background(if (focused) Orange else Color.Transparent)
             .onFocusChanged { focused = it.isFocused }
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLong)
     ) { content(focused) }
 }
 
@@ -136,56 +182,91 @@ fun Wordmark(size: TextUnit) {
 
 const val LOGO_URL = "https://gitverse.ru/api/repos/tv34online/tv34online/raw/branch/master/banner_tv.png"
 
-/** Логотип с GitVerse; если не загрузился — текстовая надпись. */
+/** Логотип с GitVerse, обрезанный по полям до размера надписи; если не загрузился — текст. */
 @Composable
-fun BrandLogo(height: Dp, fallback: TextUnit) {
+fun BrandLogo(width: Dp, height: Dp, fallback: TextUnit) {
     var failed by remember { mutableStateOf(false) }
     if (failed) Wordmark(fallback)
     else AsyncImage(
-        LOGO_URL, "Телевизор 34", Modifier.fillMaxWidth().height(height),
-        contentScale = ContentScale.Fit, alignment = Alignment.CenterStart, onError = { failed = true }
+        LOGO_URL, "Телевизор 34", Modifier.width(width).height(height).clipToBounds(),
+        contentScale = ContentScale.Crop, alignment = Alignment.Center, onError = { failed = true }
     )
 }
 
 @Composable
-fun NumBadge(num: Int, inverted: Boolean, size: Dp = 48.dp) {
-    Box(
-        Modifier.defaultMinSize(minWidth = size).height(size).clip(RoundedCornerShape(10.dp))
-            .background(if (inverted) Ink else Orange).padding(horizontal = 8.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text("$num", color = if (inverted) Orange else Ink, fontSize = (size.value * 0.42f).sp, fontWeight = FontWeight.Black)
+fun LetterBadge(name: String, inverted: Boolean, size: Dp) {
+    val letter = name.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "•"
+    Box(Modifier.fillMaxSize().background(if (inverted) Ink else Orange), contentAlignment = Alignment.Center) {
+        Text(letter, color = if (inverted) Orange else Ink, fontSize = (size.value * 0.5f).sp, fontWeight = FontWeight.Black)
     }
 }
 
-/** Логотип канала из EPG; если его нет или он не загрузился — номер канала. */
+/** Логотип из EPG на прозрачном фоне. Пока грузится или если его нет — первая буква названия. */
 @Composable
 fun Logo(ch: Channel, guide: Guide, size: Dp, inverted: Boolean) {
     val url = guide.logo(ch)
-    var failed by remember(url) { mutableStateOf(false) }
-    if (url == null || failed) NumBadge(ch.num, inverted, size)
-    else Box(
-        Modifier.size(size).clip(RoundedCornerShape(10.dp)).background(Color.Black).padding(6.dp),
+    var state by remember(url) { mutableIntStateOf(0) }
+    Box(
+        Modifier.size(size).clip(RoundedCornerShape(10.dp)).background(if (inverted) Ink else Color.Transparent),
         contentAlignment = Alignment.Center
     ) {
-        AsyncImage(url, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit, onError = { failed = true })
+        if (url != null && state != 2) AsyncImage(
+            url, null, Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit,
+            onSuccess = { state = 1 }, onError = { state = 2 }
+        )
+        if (url == null || state != 1) LetterBadge(ch.name, inverted, size)
     }
 }
 
 @Composable
-fun ChannelList(items: List<Channel>, guide: Guide, onPick: (Channel) -> Unit, modifier: Modifier) {
+fun MenuItem(label: String, onClick: () -> Unit) {
+    Pressable(Modifier.fillMaxWidth(), onClick) { f ->
+        Text(label, Modifier.padding(horizontal = 14.dp, vertical = 12.dp), color = if (f) Ink else Paper, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+@Composable
+fun RenameDialog(c: Channel, onDismiss: () -> Unit, onSave: (String) -> Unit) {
+    var text by remember { mutableStateOf(c.name) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    Dialog(onDismissRequest = onDismiss) {
+        Column(Modifier.clip(RoundedCornerShape(20.dp)).background(Color(0xFF1E1E1E)).padding(20.dp).widthIn(min = 320.dp)) {
+            Text("Название канала", color = Muted, fontSize = 16.sp)
+            Spacer(Modifier.height(10.dp))
+            BasicTextField(
+                text, { text = it },
+                Modifier.fillMaxWidth().focusRequester(focus).clip(RoundedCornerShape(10.dp)).background(Ink).padding(14.dp),
+                textStyle = TextStyle(color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold),
+                cursorBrush = SolidColor(Orange), singleLine = true,
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { onSave(text) })
+            )
+            Spacer(Modifier.height(12.dp))
+            MenuItem("Сохранить") { onSave(text) }
+            MenuItem("Вернуть исходное") { onSave(c.epgKey) }
+        }
+    }
+}
+
+@Composable
+fun ChannelList(
+    items: List<Channel>, guide: Guide, favs: Set<String>,
+    onPick: (Channel) -> Unit, onMenu: (Channel) -> Unit, modifier: Modifier
+) {
     LazyColumn(modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         items(items, key = { it.num }) { ch ->
-            Pressable(Modifier.fillMaxWidth(), { onPick(ch) }) { f ->
+            Pressable(Modifier.fillMaxWidth(), { onPick(ch) }, { onMenu(ch) }) { f ->
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
                     Logo(ch, guide, 48.dp, f)
                     Spacer(Modifier.width(16.dp))
-                    Column {
+                    Column(Modifier.weight(1f)) {
                         Text(ch.name, color = if (f) Ink else Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                         guide.current(ch)?.let {
                             Text(it.title, color = if (f) Ink.copy(alpha = 0.7f) else Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
+                    if (ch.url in favs) Text("★", color = if (f) Ink else Orange, fontSize = 22.sp)
                 }
             }
         }
@@ -203,27 +284,38 @@ fun GroupItem(title: String, selected: Boolean, onClick: () -> Unit) {
     }
 }
 
+const val ALL = "Все"
+const val FAV = "Избранное"
+
 @Composable
-fun Browse(all: List<Channel>, guide: Guide, onPick: (Channel) -> Unit) {
-    val groups = remember(all) { listOf("Все") + all.map { it.group }.distinct() }
-    var sel by rememberSaveable { mutableIntStateOf(0) }
-    val shown = if (sel == 0) all else all.filter { it.group == groups[sel] }
+fun Browse(all: List<Channel>, guide: Guide, favs: Set<String>, onPick: (Channel) -> Unit, onMenu: (Channel) -> Unit) {
+    val hasFav = all.any { it.url in favs }
+    val groups = remember(all, hasFav) {
+        listOf(ALL) + (if (hasFav) listOf(FAV) else emptyList()) + all.map { it.group }.distinct()
+    }
+    var picked by rememberSaveable { mutableStateOf(ALL) }
+    val sel = if (picked in groups) picked else ALL
+    val shown = when (sel) {
+        ALL -> all
+        FAV -> all.filter { it.url in favs }
+        else -> all.filter { it.group == sel }
+    }
     if (LocalConfiguration.current.screenWidthDp >= 720) {
         Row(Modifier.fillMaxSize()) {
             Column(Modifier.width(300.dp).fillMaxHeight().padding(24.dp)) {
-                BrandLogo(110.dp, 28.sp)
+                BrandLogo(250.dp, 48.dp, 28.sp)
                 Spacer(Modifier.height(20.dp))
-                LazyColumn { itemsIndexed(groups) { i, g -> GroupItem(g, i == sel) { sel = i } } }
+                LazyColumn { items(groups) { g -> GroupItem(g, g == sel) { picked = g } } }
             }
-            ChannelList(shown, guide, onPick, Modifier.weight(1f).fillMaxHeight())
+            ChannelList(shown, guide, favs, onPick, onMenu, Modifier.weight(1f).fillMaxHeight())
         }
     } else {
         Column(Modifier.fillMaxSize()) {
-            Box(Modifier.padding(start = 12.dp, top = 8.dp, bottom = 4.dp)) { BrandLogo(64.dp, 26.sp) }
+            Box(Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp)) { BrandLogo(190.dp, 36.dp, 26.sp) }
             LazyRow(contentPadding = PaddingValues(horizontal = 10.dp)) {
-                itemsIndexed(groups) { i, g -> GroupItem(g, i == sel) { sel = i } }
+                items(groups) { g -> GroupItem(g, g == sel) { picked = g } }
             }
-            ChannelList(shown, guide, onPick, Modifier.weight(1f))
+            ChannelList(shown, guide, favs, onPick, onMenu, Modifier.weight(1f))
         }
     }
 }
