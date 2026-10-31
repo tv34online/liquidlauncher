@@ -4,7 +4,7 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
-data class Channel(val num: Int, val name: String, val group: String, val url: String, val tvgName: String? = null, val logo: String? = null)
+data class Channel(val num: Int, val name: String, val group: String, val url: String, val tvgName: String? = null, val logo: String? = null, val epgKey: String = name)
 
 object Playlist {
     const val URL = "https://gitverse.ru/api/repos/tv34online/tv34online/raw/branch/master/playlist.m3u"
