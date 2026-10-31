@@ -6,6 +6,8 @@ import org.json.JSONObject
 import org.xmlpull.v1.XmlPullParser
 import java.io.BufferedInputStream
 import java.io.File
+import java.io.FilterInputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.text.SimpleDateFormat
@@ -24,22 +26,32 @@ object Epg {
     fun norm(s: String) = s.lowercase().split(Regex("[^\\p{L}\\p{N}]+"))
         .filter { it.isNotEmpty() && it !in noise }.joinToString("")
 
-    fun load(file: File, channels: List<Channel>): Map<String, ChEpg> {
+    fun load(file: File, channels: List<Channel>, onProgress: (Int) -> Unit = {}): Map<String, ChEpg> {
         if (file.exists() && System.currentTimeMillis() - file.lastModified() < 3 * 3600_000L) {
             runCatching { return read(file) }
         }
-        return try { fetch(channels).also { write(file, it) } }
+        return try { fetch(channels, onProgress).also { write(file, it) } }
         catch (e: Exception) { if (file.exists()) read(file) else emptyMap() }
     }
 
-    private fun fetch(channels: List<Channel>): Map<String, ChEpg> {
+    private fun fetch(channels: List<Channel>, onProgress: (Int) -> Unit): Map<String, ChEpg> {
         val keys = HashMap<String, Channel>()
         for (c in channels) listOfNotNull(c.name, c.tvgName).map(::norm).filter { it.isNotEmpty() }
             .forEach { keys.putIfAbsent(it, c) }
         val conn = URL(URL).openConnection() as HttpURLConnection
         conn.connectTimeout = 15_000; conn.readTimeout = 60_000; conn.instanceFollowRedirects = true
         conn.setRequestProperty("User-Agent", "TV34/1.0")
-        val raw = BufferedInputStream(conn.inputStream, 65536)
+        val total = conn.contentLengthLong
+        var done = 0L
+        var last = -1
+        onProgress(if (total > 0) 0 else -1)
+        val raw = BufferedInputStream(CountingStream(conn.inputStream) { n ->
+            done += n
+            if (total > 0) {
+                val pct = (done * 100 / total).toInt().coerceAtMost(99)
+                if (pct != last) { last = pct; onProgress(pct) }
+            }
+        }, 65536)
         raw.mark(2); val b0 = raw.read(); val b1 = raw.read(); raw.reset()
         val input = if (b0 == 0x1f && b1 == 0x8b) GZIPInputStream(raw, 65536) else raw
 
@@ -114,4 +126,9 @@ object Epg {
             })
         }
     }
+}
+
+private class CountingStream(input: InputStream, val onRead: (Int) -> Unit) : FilterInputStream(input) {
+    override fun read(): Int { val b = super.read(); if (b >= 0) onRead(1); return b }
+    override fun read(b: ByteArray, off: Int, len: Int): Int { val n = super.read(b, off, len); if (n > 0) onRead(n); return n }
 }
