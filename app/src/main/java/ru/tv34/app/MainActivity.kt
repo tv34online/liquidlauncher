@@ -129,10 +129,7 @@ fun App(dir: File) {
                 Modifier.align(Alignment.Center).padding(32.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Image(
-                    painterResource(R.drawable.banner), null,
-                    Modifier.fillMaxWidth(0.7f).widthIn(max = 640.dp), contentScale = ContentScale.Fit
-                )
+                LoadingBanner()
                 if (failed) {
                     Spacer(Modifier.height(16.dp))
                     Text(
@@ -178,7 +175,7 @@ fun Pressable(modifier: Modifier, onClick: () -> Unit, onLong: (() -> Unit)? = n
     var focused by remember { mutableStateOf(false) }
     Box(
         modifier.clip(RoundedCornerShape(12.dp))
-            .background(if (focused) Orange else Color.Transparent)
+            .then(if (focused) Modifier.border(3.dp, Color.White, RoundedCornerShape(12.dp)) else Modifier)
             .onFocusChanged { focused = it.isFocused }
             .combinedClickable(onClick = onClick, onLongClick = onLong)
     ) { content(focused) }
@@ -210,6 +207,15 @@ fun BrandLogo(width: Dp, height: Dp, fallback: TextUnit) {
     )
 }
 
+/** banner_tv.png с GitVerse целиком, без обрезки; если не загрузился — встроенный баннер. */
+@Composable
+fun LoadingBanner() {
+    var failed by remember { mutableStateOf(false) }
+    val mod = Modifier.fillMaxWidth(0.7f).widthIn(max = 640.dp)
+    if (failed) Image(painterResource(R.drawable.banner), null, mod, contentScale = ContentScale.Fit)
+    else AsyncImage(LOGO_URL, null, mod, contentScale = ContentScale.Fit, onError = { failed = true })
+}
+
 @Composable
 fun LetterBadge(name: String, inverted: Boolean, size: Dp) {
     val letter = name.firstOrNull { it.isLetterOrDigit() }?.uppercase() ?: "•"
@@ -239,7 +245,7 @@ fun Logo(ch: Channel, guide: Guide, size: Dp, inverted: Boolean) {
 @Composable
 fun MenuItem(label: String, onClick: () -> Unit) {
     Pressable(Modifier.fillMaxWidth(), onClick) { f ->
-        Text(label, Modifier.padding(horizontal = 14.dp, vertical = 12.dp), color = if (f) Ink else Paper, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+        Text(label, Modifier.padding(horizontal = 14.dp, vertical = 12.dp), color = Paper, fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -273,18 +279,18 @@ fun ChannelList(
     onPick: (Channel) -> Unit, onMenu: (Channel) -> Unit, modifier: Modifier
 ) {
     LazyColumn(modifier, contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        items(items, key = { it.num }) { ch ->
+        items(items) { ch ->
             Pressable(Modifier.fillMaxWidth(), { onPick(ch) }, { onMenu(ch) }) { f ->
                 Row(Modifier.padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Logo(ch, guide, 48.dp, f)
+                    Logo(ch, guide, 48.dp, false)
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(ch.name, color = if (f) Ink else Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        Text(ch.name, color = Paper, fontSize = 22.sp, fontWeight = FontWeight.Bold)
                         guide.current(ch)?.let {
-                            Text(it.title, color = if (f) Ink.copy(alpha = 0.7f) else Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(it.title, color = Muted, fontSize = 15.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
                     }
-                    if (ch.url in favs) Text("★", color = if (f) Ink else Orange, fontSize = 22.sp)
+                    if (ch.url in favs) Text("★", color = Orange, fontSize = 22.sp)
                 }
             }
         }
@@ -296,7 +302,7 @@ fun GroupItem(title: String, selected: Boolean, onClick: () -> Unit) {
     Pressable(Modifier.padding(2.dp), onClick) { f ->
         Text(
             title, Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-            color = if (f) Ink else if (selected) Orange else Muted, fontSize = 18.sp,
+            color = if (selected) Orange else if (f) Paper else Muted, fontSize = 18.sp,
             fontWeight = if (selected || f) FontWeight.Bold else FontWeight.Medium
         )
     }
