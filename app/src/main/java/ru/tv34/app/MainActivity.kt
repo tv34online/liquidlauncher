@@ -28,7 +28,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
@@ -72,7 +74,9 @@ class MainActivity : ComponentActivity() {
 
 /** Логотипы и программа передач на текущий момент. */
 class Guide(private val map: Map<String, ChEpg>, val now: Long) {
-    fun logo(ch: Channel): String? = map[ch.epgKey]?.logo ?: ch.logo
+    /** Сначала иконка с вашего сервера по порядковому номеру канала, затем запасные из EPG и плейлиста. */
+    fun logos(ch: Channel): List<String> =
+        listOfNotNull(LOGO_BASE + ch.num + ".png", map[ch.epgKey]?.logo, ch.logo).distinct()
     fun current(ch: Channel): Prog? = map[ch.epgKey]?.progs?.firstOrNull { now >= it.start && now < it.stop }
     fun next(ch: Channel): Prog? = current(ch)?.let { c -> map[ch.epgKey]?.progs?.firstOrNull { it.start >= c.stop } }
 }
@@ -109,7 +113,7 @@ fun App(dir: File) {
     LaunchedEffect(raw) {
         val list = raw ?: return@LaunchedEffect
         epg = withContext(Dispatchers.IO) {
-            runCatching { Epg.load(File(dir, "epg.json"), list) { epgPct = it } }.getOrDefault(emptyMap())
+            runCatching { Epg.load(File(dir, "epg.json"), list, { epgPct = it }) { epg = it } }.getOrDefault(emptyMap())
         }
         if (epgPct > -2) { epgPct = 100; delay(1500) }
         epgPct = -2
@@ -121,10 +125,22 @@ fun App(dir: File) {
         val list = channels
         val cur = playing
         when {
-            list == null -> Text(
-                if (failed) "Не удалось загрузить каналы. Проверьте интернет и откройте приложение снова." else "Загружаем каналы",
-                Modifier.align(Alignment.Center).padding(32.dp), color = Muted, fontSize = 20.sp
-            )
+            list == null -> Column(
+                Modifier.align(Alignment.Center).padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Image(
+                    painterResource(R.drawable.banner), null,
+                    Modifier.fillMaxWidth(0.7f).widthIn(max = 640.dp), contentScale = ContentScale.Fit
+                )
+                if (failed) {
+                    Spacer(Modifier.height(16.dp))
+                    Text(
+                        "Не удалось загрузить каналы. Проверьте интернет и откройте приложение снова.",
+                        color = Muted, fontSize = 18.sp, textAlign = TextAlign.Center
+                    )
+                }
+            }
             cur == null -> Browse(list, guide, favs, { playing = it }, { menuFor = it })
             else -> PlayerScreen(list, cur, guide, { playing = it }, { playing = null })
         }
@@ -180,6 +196,7 @@ fun Wordmark(size: TextUnit) {
     }
 }
 
+const val LOGO_BASE = "https://tv34online.gitverse.site/logo-style/"
 const val LOGO_URL = "https://gitverse.ru/api/repos/tv34online/tv34online/raw/branch/master/banner_tv.png"
 
 /** Логотип с GitVerse, обрезанный по полям до размера надписи; если не загрузился — текст. */
@@ -201,20 +218,21 @@ fun LetterBadge(name: String, inverted: Boolean, size: Dp) {
     }
 }
 
-/** Логотип из EPG на прозрачном фоне. Пока грузится или если его нет — первая буква названия. */
+/** Иконка канала с вашего сервера на прозрачном фоне. Пока грузится или если её нет — первая буква названия. */
 @Composable
 fun Logo(ch: Channel, guide: Guide, size: Dp, inverted: Boolean) {
-    val url = guide.logo(ch)
-    var state by remember(url) { mutableIntStateOf(0) }
+    val urls = guide.logos(ch)
+    var idx by remember(ch.num) { mutableIntStateOf(0) }
+    var ok by remember(ch.num) { mutableStateOf(false) }
     Box(
         Modifier.size(size).clip(RoundedCornerShape(10.dp)).background(if (inverted) Ink else Color.Transparent),
         contentAlignment = Alignment.Center
     ) {
-        if (url != null && state != 2) AsyncImage(
-            url, null, Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit,
-            onSuccess = { state = 1 }, onError = { state = 2 }
+        if (idx < urls.size) AsyncImage(
+            urls[idx], null, Modifier.fillMaxSize().padding(4.dp), contentScale = ContentScale.Fit,
+            onSuccess = { ok = true }, onError = { idx++ }
         )
-        if (url == null || state != 1) LetterBadge(ch.name, inverted, size)
+        if (idx >= urls.size || !ok) LetterBadge(ch.name, inverted, size)
     }
 }
 
