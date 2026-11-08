@@ -8,6 +8,7 @@ data class Channel(val num: Int, val name: String, val group: String, val url: S
 
 object Playlist {
     const val URL = "https://gitverse.ru/api/repos/tv34online/tv34online/raw/branch/master/playlist.m3u"
+    const val RESERVE = "https://chekvidzetelefap.github.io/tv34app/playlist_rezerv.m3u"
     private val groupRe = Regex("group-title=\"([^\"]*)\"")
     private val tvgRe = Regex("tvg-name=\"([^\"]*)\"")
     private val logoRe = Regex("tvg-logo=\"([^\"]*)\"")
@@ -33,11 +34,23 @@ object Playlist {
         return out
     }
 
-    private fun download(): String {
-        val c = URL(URL).openConnection() as HttpURLConnection
-        c.connectTimeout = 10_000; c.readTimeout = 10_000
+    private fun fetch(address: String): String {
+        val c = URL(address).openConnection() as HttpURLConnection
+        c.connectTimeout = 8_000; c.readTimeout = 10_000
         c.setRequestProperty("User-Agent", "TV34/1.0")
         return c.inputStream.bufferedReader().use { it.readText() }
+    }
+
+    /** Основной источник, потом резервный. Берём первый, где есть хотя бы один канал. */
+    private fun download(): String {
+        var last: Exception? = null
+        for (address in listOf(URL, RESERVE)) {
+            try {
+                val text = fetch(address)
+                if (parse(text).isNotEmpty()) return text
+            } catch (e: Exception) { last = e }
+        }
+        throw last ?: IllegalStateException("Плейлист пуст")
     }
 
     /** Сеть, а при ошибке — последняя сохранённая копия. */
