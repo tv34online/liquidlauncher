@@ -9,6 +9,7 @@ data class Channel(val num: Int, val name: String, val group: String, val url: S
 object Playlist {
     const val URL = "https://gitverse.ru/api/repos/tv34online/tv34online/raw/branch/master/playlist.m3u"
     const val RESERVE = "https://chekvidzetelefap.github.io/tv34app/playlist_rezerv.m3u"
+    private val chnRe = Regex("#CHN:\\s*(\\d+)")
     private val groupRe = Regex("group-title=\"([^\"]*)\"")
     private val tvgRe = Regex("tvg-name=\"([^\"]*)\"")
     private val logoRe = Regex("tvg-logo=\"([^\"]*)\"")
@@ -19,6 +20,7 @@ object Playlist {
         var group = "Каналы"
         var tvg: String? = null
         var logo: String? = null
+        var chn: Int? = null
         for (raw in text.lineSequence()) {
             val l = raw.trim()
             if (l.startsWith("#EXTINF")) {
@@ -26,12 +28,13 @@ object Playlist {
                 group = groupRe.find(l)?.groupValues?.get(1)?.takeIf { it.isNotBlank() } ?: "Каналы"
                 tvg = tvgRe.find(l)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
                 logo = logoRe.find(l)?.groupValues?.get(1)?.takeIf { it.isNotBlank() }
+                chn = chnRe.find(l)?.groupValues?.get(1)?.toIntOrNull()
             } else if (l.isNotEmpty() && !l.startsWith("#") && name != null) {
-                out += Channel(out.size + 1, name, group, l, tvg, logo)
+                out += Channel(chn ?: (out.size + 1), name, group, l, tvg, logo)
                 name = null
             }
         }
-        return out
+        return out.sortedBy { it.num }
     }
 
     private fun fetch(address: String): String {
